@@ -4,6 +4,7 @@ Terraria auto-fishing helper (screen-motion based).
 
 Hotkeys
 - i: calibrate bobber region (move mouse over the bobber / expected bobber spot)
+- l: save Quick Stack button position (move mouse over Quick Stack first)
 - o: start/pause automation
 
 Notes
@@ -43,6 +44,7 @@ class Config:
     trigger_frames: int = 2
     cooldown_seconds: float = 0.75
     button: str = "left"
+    quick_stack_click_delay: float = 0.20
     verbose: bool = False
 
 
@@ -53,6 +55,8 @@ class TerrariaAutoFisher:
         self._enabled = False
         self._exit_requested = False
         self._roi_center: Optional[tuple[int, int]] = None
+        self._cast_position: Optional[tuple[int, int]] = None
+        self._quick_stack_position: Optional[tuple[int, int]] = None
         self._last_hotkey: dict[str, float] = {}
         self._dpi_awareness_set = False
         self._dpi_warning_logged = False
@@ -86,6 +90,22 @@ class TerrariaAutoFisher:
         with self._lock:
             self._roi_center = (x, y)
 
+    def _get_cast_position(self) -> Optional[tuple[int, int]]:
+        with self._lock:
+            return self._cast_position
+
+    def _set_cast_position(self, x: int, y: int) -> None:
+        with self._lock:
+            self._cast_position = (x, y)
+
+    def _get_quick_stack_position(self) -> Optional[tuple[int, int]]:
+        with self._lock:
+            return self._quick_stack_position
+
+    def _set_quick_stack_position(self, x: int, y: int) -> None:
+        with self._lock:
+            self._quick_stack_position = (x, y)
+
     def _is_enabled(self) -> bool:
         with self._lock:
             return self._enabled
@@ -111,10 +131,29 @@ class TerrariaAutoFisher:
         if not self._is_terraria_foreground():
             self._log("[WARN] Click skipped because Terraria is not the active window")
             return
+        cast_position = self._get_cast_position()
+        if cast_position is not None:
+            self._mouse.position = cast_position
         # Some games miss extremely short synthetic clicks; hold briefly.
         self._mouse.press(self._button)
         time.sleep(self.cfg.click_hold_seconds)
         self._mouse.release(self._button)
+
+    def _click_at(self, x: int, y: int) -> None:
+        if not self._is_terraria_foreground():
+            self._log("[WARN] Click skipped because Terraria is not the active window")
+            return
+        self._mouse.position = (int(x), int(y))
+        self._mouse.press(self._button)
+        time.sleep(self.cfg.click_hold_seconds)
+        self._mouse.release(self._button)
+
+    def _move_to_cast_position(self) -> bool:
+        cast_position = self._get_cast_position()
+        if cast_position is None:
+            return False
+        self._mouse.position = cast_position
+        return True
 
     def _enable_windows_dpi_awareness(self) -> None:
         if os.name != "nt":
@@ -163,6 +202,20 @@ class TerrariaAutoFisher:
         # Use a strict prefix so terminal/editor titles containing the project
         # folder name ("terraria") do not count as the game window.
         return title.lower().startswith("terraria")
+
+    def _click_quick_stack_if_found(self) -> bool:
+        cached_position = self._get_quick_stack_position()
+        if cached_position is None:
+            self._log("[INFO] Quick Stack position not set. Move mouse over it and press l.")
+            return False
+        x, y = cached_position
+        self._log(f"[ACTION] Quick Stack click at saved ({x}, {y})")
+        time.sleep(self.cfg.quick_stack_click_delay)
+        self._mouse.position = (int(x), int(y))
+        time.sleep(self.cfg.quick_stack_click_delay)
+        self._click_at(x, y)
+        time.sleep(self.cfg.quick_stack_click_delay)
+        return True
 
     def _grab_gray_region(self, size: int) -> np.ndarray:
         center = self._get_roi_center()
@@ -229,14 +282,22 @@ class TerrariaAutoFisher:
     def _reel_and_recast(self, reason: str) -> None:
         self._log(f"[ACTION] {reason}: reel + recast")
         self._click()  # reel / collect
-        time.sleep(self.cfg.post_reel_delay)
+        time.sleep(self.cfg.quick_stack_click_delay)
+        quick_stack_clicked = False
+        if self._is_enabled() and not self._should_exit():
+            quick_stack_clicked = self._click_quick_stack_if_found()
         if not self._is_enabled() or self._should_exit():
             return
+        self._move_to_cast_position()
+        time.sleep(self.cfg.quick_stack_click_delay)
         self._click()  # cast again
         time.sleep(self.cfg.post_cast_delay)
 
     def _start_cast(self) -> None:
+        x, y = self._current_mouse_position()
+        self._set_cast_position(x, y)
         self._log("[ACTION] initial cast")
+        self._log(f"[INFO] Cast position recorded at ({x}, {y})")
         self._click()
         time.sleep(self.cfg.post_cast_delay)
 
@@ -351,6 +412,12 @@ class TerrariaAutoFisher:
                 self._log(f"[INFO] ROI calibrated at ({x}, {y})")
                 return
 
+            if key_char == "l" and self._debounced("quick_stack"):
+                x, y = self._current_mouse_position()
+                self._set_quick_stack_position(x, y)
+                self._log(f"[INFO] Quick Stack position saved at ({x}, {y})")
+                return
+
             if key_char == "o" and self._debounced("toggle"):
                 new_state = not self._is_enabled()
                 self._set_enabled(new_state)
@@ -363,9 +430,9 @@ class TerrariaAutoFisher:
 
     def run(self) -> None:
         self._log("Terraria auto-fishing helper")
-        self._log("Hotkeys: i=calibrate ROI, o=start/pause")
+        self._log("Hotkeys: i=calibrate ROI, l=set Quick Stack point, o=start/pause")
         self._log(
-            "Usage: cast spot should remain stable; place cursor over bobber area and press i."
+            "Usage: press i on bobber area, press l on Quick Stack, then press o to start."
         )
         if os.name == "nt":
             self._log(
@@ -468,6 +535,12 @@ def parse_args() -> Config:
         help="Mouse button used for fishing action.",
     )
     parser.add_argument(
+        "--quick-stack-click-delay",
+        type=float,
+        default=0.20,
+        help="Shared delay used around Quick Stack movement/click and before recast.",
+    )
+    parser.add_argument(
         "--verbose",
         action="store_true",
         help="Print per-frame diff values for threshold tuning.",
@@ -492,6 +565,7 @@ def parse_args() -> Config:
         trigger_frames=max(1, int(ns.trigger_frames)),
         cooldown_seconds=max(0.0, float(ns.cooldown_seconds)),
         button=ns.button,
+        quick_stack_click_delay=max(0.0, float(ns.quick_stack_click_delay)),
         verbose=bool(ns.verbose),
     )
 
