@@ -5,7 +5,6 @@ Terraria auto-fishing helper (screen-motion based).
 Hotkeys
 - i: calibrate bobber region (move mouse over the bobber / expected bobber spot)
 - o: start/pause automation
-- p: exit script
 
 Notes
 - Works best in windowed or borderless mode with a stable camera/cursor position.
@@ -358,17 +357,13 @@ class TerrariaAutoFisher:
                 self._log("[INFO] Auto-fishing ON" if new_state else "[INFO] Auto-fishing PAUSED")
                 return
 
-            if key_char == "p" and self._debounced("exit"):
-                self._log("[INFO] Exit requested")
-                self._request_exit()
-                return
         except Exception as exc:
             self._log(f"[ERROR] Hotkey handler failed: {exc}")
             self._request_exit()
 
     def run(self) -> None:
         self._log("Terraria auto-fishing helper")
-        self._log("Hotkeys: i=calibrate ROI, o=start/pause, p=exit")
+        self._log("Hotkeys: i=calibrate ROI, o=start/pause")
         self._log(
             "Usage: cast spot should remain stable; place cursor over bobber area and press i."
         )
