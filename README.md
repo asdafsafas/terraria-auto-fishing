@@ -1,12 +1,13 @@
 # Terraria Auto-Fishing Helper
 
-Screen-motion-based auto-fishing helper for Terraria. The script watches a small region around your bobber and reels/recasts when it detects a bite-like motion.
+Screen-motion-based auto-fishing helper for Terraria. The script watches a small region around your bobber, reels/recasts on bite-like motion, and can optionally click a saved `Quick Stack` button between catches.
 
 ## Features
 
-- Hotkeys to calibrate, start/pause, and stop
+- Hotkeys to calibrate, save `Quick Stack`, and start/pause
 - Motion detection using frame-to-frame and baseline differences
 - Drift tolerance (`--search-margin`) to catch bobber bounces away from the calibrated spot
+- Optional `Quick Stack` click between reel and recast (saved mouse position)
 - Windows safety check to avoid clicking when Terraria is not the active window
 
 ## Requirements
@@ -24,6 +25,7 @@ pip install -r requirements.txt
 
 - `terraria_autofish.py`: main script
 - `requirements.txt`: Python dependencies
+- `assets/`: fish images (project assets/reference images)
 
 ## Quick Start
 
@@ -38,15 +40,16 @@ In-game usage:
 1. Stand where you want to fish and get ready to cast.
 2. Move your mouse cursor over the bobber (or where the bobber usually lands).
 3. Press `i` to calibrate the detection region.
-4. Press `o` to start auto-fishing.
-5. Press `o` again to pause.
-6. Press `p` to exit the script.
+4. (Optional) Move your mouse over the inventory `Quick Stack` button and press `l` to save it.
+5. Press `o` to start auto-fishing (the current mouse position is saved as the cast position).
+6. Press `o` again to pause/resume.
+7. Stop the script with `Ctrl+C` in the terminal.
 
 ## Hotkeys
 
 - `i`: Calibrate bobber region (uses current mouse position)
+- `l`: Save `Quick Stack` button position (uses current mouse position)
 - `o`: Start / pause automation
-- `p`: Exit script
 
 ## How It Works (Short Version)
 
@@ -62,6 +65,7 @@ In-game usage:
 - Keep the cast area stable (camera movement and large background motion can cause false triggers).
 - On Windows, clicks are only sent when the active window title starts with `Terraria`.
 - If you alt-tab away, detection pauses until Terraria is focused again.
+- If you do not set a `Quick Stack` position with `l`, the script will continue fishing and log a reminder.
 
 ## Tuning / Common Issues
 
@@ -126,7 +130,10 @@ Main options:
 - `--trigger-frames`: Consecutive frames needed to trigger
 - `--cooldown-seconds`: Minimum time between triggers
 - `--button {left,right}`: Mouse button used for fishing
+- `--quick-stack-click-delay`: Delay around `Quick Stack` move/click and before recast
 - `--verbose`: Print debug diff values
+
+Note: `--post-reel-delay` is currently exposed in the CLI, but the present script version uses `--quick-stack-click-delay` for the reel/Quick Stack/recast timing path.
 
 ## Example Configs
 
@@ -140,6 +147,12 @@ More bobber drift tolerance:
 
 ```powershell
 python terraria_autofish.py --search-margin 18
+```
+
+With Quick Stack timing tuned a bit slower:
+
+```powershell
+python terraria_autofish.py --quick-stack-click-delay 0.3
 ```
 
 Conservative (fewer false triggers):

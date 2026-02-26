@@ -60,7 +60,6 @@ class TerrariaAutoFisher:
         self._last_hotkey: dict[str, float] = {}
         self._dpi_awareness_set = False
         self._dpi_warning_logged = False
-        self._focus_api_warning_logged = False
 
         self._enable_windows_dpi_awareness()
         self._sct = mss()
@@ -128,9 +127,6 @@ class TerrariaAutoFisher:
         return int(x), int(y)
 
     def _click(self) -> None:
-        if not self._is_terraria_foreground():
-            self._log("[WARN] Click skipped because Terraria is not the active window")
-            return
         cast_position = self._get_cast_position()
         if cast_position is not None:
             self._mouse.position = cast_position
@@ -140,9 +136,6 @@ class TerrariaAutoFisher:
         self._mouse.release(self._button)
 
     def _click_at(self, x: int, y: int) -> None:
-        if not self._is_terraria_foreground():
-            self._log("[WARN] Click skipped because Terraria is not the active window")
-            return
         self._mouse.position = (int(x), int(y))
         self._mouse.press(self._button)
         time.sleep(self.cfg.click_hold_seconds)
@@ -171,37 +164,6 @@ class TerrariaAutoFisher:
             if not self._dpi_warning_logged:
                 self._log(f"[WARN] Could not enable DPI awareness: {exc}")
                 self._dpi_warning_logged = True
-
-    def _active_window_title(self) -> str:
-        if os.name != "nt":
-            return ""
-        try:
-            user32 = ctypes.windll.user32
-            hwnd = user32.GetForegroundWindow()
-            if not hwnd:
-                return ""
-            length = user32.GetWindowTextLengthW(hwnd)
-            if length <= 0:
-                return ""
-            buf = ctypes.create_unicode_buffer(length + 1)
-            user32.GetWindowTextW(hwnd, buf, len(buf))
-            return buf.value
-        except Exception as exc:
-            if not self._focus_api_warning_logged:
-                self._log(f"[WARN] Foreground-window check unavailable: {exc}")
-                self._focus_api_warning_logged = True
-            return ""
-
-    def _is_terraria_foreground(self) -> bool:
-        if os.name != "nt":
-            return True
-        title = self._active_window_title()
-        if not title:
-            # Fail closed on Windows to avoid accidental clicks into other apps.
-            return False
-        # Use a strict prefix so terminal/editor titles containing the project
-        # folder name ("terraria") do not count as the game window.
-        return title.lower().startswith("terraria")
 
     def _click_quick_stack_if_found(self) -> bool:
         cached_position = self._get_quick_stack_position()
@@ -318,15 +280,6 @@ class TerrariaAutoFisher:
 
         while self._is_enabled() and not self._should_exit():
             loop_started = time.monotonic()
-            if not self._is_terraria_foreground():
-                # Pause detection while tabbed out so we do not detect browser/editor
-                # motion and so idle timeout does not immediately recast on return.
-                cast_time = loop_started
-                prev_frame = None
-                baseline_frame = None
-                streak = 0
-                time.sleep(0.10)
-                continue
 
             try:
                 frame = self._grab_gray_roi()
@@ -437,8 +390,7 @@ class TerrariaAutoFisher:
         if os.name == "nt":
             self._log(
                 "[INFO] Windows safeguards: DPI awareness "
-                f"{'enabled' if self._dpi_awareness_set else 'not enabled'}, "
-                "clicks require Terraria window focus."
+                f"{'enabled' if self._dpi_awareness_set else 'not enabled'}."
             )
 
         listener = pynput_keyboard.Listener(on_press=self._on_press)
