@@ -5,7 +5,9 @@ Terraria auto-fishing helper (screen-motion based).
 Hotkeys
 - i: calibrate bobber region (move mouse over the bobber / expected bobber spot)
 - l: save Quick Stack button position (move mouse over Quick Stack first)
-- o: start/pause automation
+- k: toggle skipping Quick Stack during recast
+- Ctrl+P: enable/disable automation
+- o: set cast position and cast/start fishing
 
 Notes
 - Works best in windowed or borderless mode with a stable camera/cursor position.
@@ -53,10 +55,14 @@ class TerrariaAutoFisher:
         self.cfg = cfg
         self._lock = threading.Lock()
         self._enabled = False
+        self._fishing_active = False
+        self._cast_requested = False
         self._exit_requested = False
         self._roi_center: Optional[tuple[int, int]] = None
         self._cast_position: Optional[tuple[int, int]] = None
         self._quick_stack_position: Optional[tuple[int, int]] = None
+        self._skip_quick_stack = False
+        self._ctrl_pressed = False
         self._last_hotkey: dict[str, float] = {}
         self._dpi_awareness_set = False
         self._dpi_warning_logged = False
@@ -112,11 +118,34 @@ class TerrariaAutoFisher:
     def _set_enabled(self, value: bool) -> None:
         with self._lock:
             self._enabled = value
+            if not value:
+                self._fishing_active = False
+                self._cast_requested = False
+
+    def _is_fishing_active(self) -> bool:
+        with self._lock:
+            return self._fishing_active
+
+    def _set_fishing_active(self, value: bool) -> None:
+        with self._lock:
+            self._fishing_active = value
+
+    def _request_cast(self) -> None:
+        with self._lock:
+            self._cast_requested = True
+
+    def _consume_cast_request(self) -> bool:
+        with self._lock:
+            requested = self._cast_requested
+            self._cast_requested = False
+            return requested
 
     def _request_exit(self) -> None:
         with self._lock:
             self._exit_requested = True
             self._enabled = False
+            self._fishing_active = False
+            self._cast_requested = False
 
     def _should_exit(self) -> bool:
         with self._lock:
@@ -178,6 +207,14 @@ class TerrariaAutoFisher:
         self._click_at(x, y)
         time.sleep(self.cfg.quick_stack_click_delay)
         return True
+
+    def _get_skip_quick_stack(self) -> bool:
+        with self._lock:
+            return self._skip_quick_stack
+
+    def _set_skip_quick_stack(self, value: bool) -> None:
+        with self._lock:
+            self._skip_quick_stack = value
 
     def _grab_gray_region(self, size: int) -> np.ndarray:
         center = self._get_roi_center()
@@ -246,7 +283,9 @@ class TerrariaAutoFisher:
         self._click()  # reel / collect
         time.sleep(self.cfg.quick_stack_click_delay)
         quick_stack_clicked = False
-        if self._is_enabled() and not self._should_exit():
+        if self._get_skip_quick_stack():
+            self._log("[ACTION] Skipping Quick Stack (k toggle enabled)")
+        elif self._is_enabled() and not self._should_exit():
             quick_stack_clicked = self._click_quick_stack_if_found()
         if not self._is_enabled() or self._should_exit():
             return
@@ -272,13 +311,25 @@ class TerrariaAutoFisher:
         frame_interval = 1.0 / max(self.cfg.fps, 1.0)
         last_trigger_time = 0.0
 
-        self._start_cast()
-        cast_time = time.monotonic()
+        cast_time = 0.0
         prev_frame: Optional[np.ndarray] = None
         baseline_frame: Optional[np.ndarray] = None
         streak = 0
 
         while self._is_enabled() and not self._should_exit():
+            if self._consume_cast_request():
+                self._start_cast()
+                cast_time = time.monotonic()
+                prev_frame = None
+                baseline_frame = None
+                streak = 0
+                self._set_fishing_active(True)
+                continue
+
+            if not self._is_fishing_active():
+                time.sleep(0.05)
+                continue
+
             loop_started = time.monotonic()
 
             try:
@@ -355,6 +406,14 @@ class TerrariaAutoFisher:
 
     def _on_press(self, key: pynput_keyboard.Key | pynput_keyboard.KeyCode) -> None:
         try:
+            if key in (
+                pynput_keyboard.Key.ctrl,
+                pynput_keyboard.Key.ctrl_l,
+                pynput_keyboard.Key.ctrl_r,
+            ):
+                self._ctrl_pressed = True
+                return
+
             key_char = getattr(key, "char", None)
             if isinstance(key_char, str):
                 key_char = key_char.lower()
@@ -371,21 +430,55 @@ class TerrariaAutoFisher:
                 self._log(f"[INFO] Quick Stack position saved at ({x}, {y})")
                 return
 
-            if key_char == "o" and self._debounced("toggle"):
+            if key_char == "k" and self._debounced("skip_quick_stack_toggle"):
+                new_state = not self._get_skip_quick_stack()
+                self._set_skip_quick_stack(new_state)
+                self._log(
+                    "[INFO] Skip Quick Stack ON"
+                    if new_state
+                    else "[INFO] Skip Quick Stack OFF"
+                )
+                return
+
+            is_ctrl_p = self._ctrl_pressed and key_char in ("p", "\x10")
+            if is_ctrl_p and self._debounced("toggle_enabled"):
                 new_state = not self._is_enabled()
                 self._set_enabled(new_state)
-                self._log("[INFO] Auto-fishing ON" if new_state else "[INFO] Auto-fishing PAUSED")
+                if new_state:
+                    self._log("[INFO] Script ENABLED (press o to cast/start)")
+                else:
+                    self._log("[INFO] Script DISABLED")
+                return
+
+            if key_char == "o" and self._debounced("cast_start"):
+                if not self._is_enabled():
+                    self._log("[INFO] Script is disabled. Press Ctrl+P first.")
+                    return
+                self._request_cast()
+                self._log("[INFO] Cast requested at current cursor position")
                 return
 
         except Exception as exc:
             self._log(f"[ERROR] Hotkey handler failed: {exc}")
             self._request_exit()
 
+    def _on_release(self, key: pynput_keyboard.Key | pynput_keyboard.KeyCode) -> None:
+        if key in (
+            pynput_keyboard.Key.ctrl,
+            pynput_keyboard.Key.ctrl_l,
+            pynput_keyboard.Key.ctrl_r,
+        ):
+            self._ctrl_pressed = False
+
     def run(self) -> None:
         self._log("Terraria auto-fishing helper")
-        self._log("Hotkeys: i=calibrate ROI, l=set Quick Stack point, o=start/pause")
         self._log(
-            "Usage: press i on bobber area, press l on Quick Stack, then press o to start."
+            "Hotkeys: i=calibrate ROI, l=set Quick Stack point, "
+            "k=skip Quick Stack toggle, Ctrl+P=enable/disable, o=cast/start"
+        )
+        self._log(
+            "Usage: press i on bobber area, press l on Quick Stack, "
+            "press Ctrl+P to enable, then press o to mark cast position and cast."
         )
         if os.name == "nt":
             self._log(
@@ -393,7 +486,10 @@ class TerrariaAutoFisher:
                 f"{'enabled' if self._dpi_awareness_set else 'not enabled'}."
             )
 
-        listener = pynput_keyboard.Listener(on_press=self._on_press)
+        listener = pynput_keyboard.Listener(
+            on_press=self._on_press,
+            on_release=self._on_release,
+        )
         listener.start()
         try:
             while not self._should_exit():
